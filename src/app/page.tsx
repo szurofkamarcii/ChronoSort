@@ -1,65 +1,172 @@
-import Image from "next/image";
+import Link from "next/link";
+import { createClient } from "@/lib/supabase/server";
+import UserMenu from "@/components/UserMenu";
 
-export default function Home() {
+export default async function LandingPage() {
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+
+  const today = new Date().toLocaleDateString("hu-HU", {
+    year: "numeric",
+    month: "long",
+    day: "numeric",
+  });
+
   return (
-    <div className="flex flex-col flex-1 items-center justify-center bg-zinc-50 font-sans dark:bg-black">
-      <main className="flex flex-1 w-full max-w-3xl flex-col items-center justify-between py-32 px-16 bg-white dark:bg-black sm:items-start">
-        <Image
-          className="dark:invert"
-          src="/next.svg"
-          alt="Next.js logo"
-          width={100}
-          height={20}
-          priority
-        />
-        <div className="flex flex-col items-center gap-6 text-center sm:items-start sm:text-left">
-          <h1 className="max-w-xs text-3xl font-semibold leading-10 tracking-tight text-black dark:text-zinc-50">
-            To get started, edit the page.tsx file.
-          </h1>
-          <p className="max-w-md text-lg leading-8 text-zinc-600 dark:text-zinc-400">
-            Looking for a starting point or more instructions? Head over to{" "}
-            <a
-              href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Templates
-            </a>{" "}
-            or the{" "}
-            <a
-              href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Learning
-            </a>{" "}
-            center.
-          </p>
+    <main className="min-h-screen bg-gradient-to-b from-gray-50 to-gray-200 flex flex-col items-center justify-center p-4 font-sans selection:bg-blue-200">
+      {/* Fejléc & Logó */}
+      <div className="mb-10 text-center mt-8 md:mt-0">
+        <div className="flex justify-center mb-4">
+          <div className="w-16 h-16 bg-gradient-to-br from-blue-600 to-indigo-600 rounded-2xl shadow-lg flex items-center justify-center transform -rotate-3 hover:rotate-0 transition-transform">
+            <svg
+              className="w-8 h-8 text-white"
+              fill="none"
+              stroke="currentColor"
+              viewBox="0 0 24 24">
+              <path
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                strokeWidth="2"
+                d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"
+              />
+            </svg>
+          </div>
         </div>
-        <div className="flex flex-col gap-4 text-base font-medium sm:flex-row">
-          <a
-            className="flex h-12 w-full items-center justify-center gap-2 rounded-full bg-foreground px-5 text-background transition-colors hover:bg-[#383838] dark:hover:bg-[#ccc] md:w-[158px]"
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            <Image
-              className="dark:invert"
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={16}
-              height={16}
+        <h1 className="text-4xl md:text-5xl font-black text-gray-900 tracking-tight mb-2">
+          ChronoSort
+        </h1>
+        <p className="text-gray-500 font-medium">
+          Rendezd időrendbe a történelmet!
+        </p>
+      </div>
+
+      {/* Bekötöttük az interaktív Felhasználói Menüt */}
+      <UserMenu user={user} />
+
+      {/* Játékmódok konténere */}
+      <div className="w-full max-w-sm flex flex-col gap-5">
+        {/* Napi Kihívás Kártya */}
+        <div className="bg-white rounded-3xl p-6 shadow-xl shadow-blue-900/5 border border-blue-50 relative overflow-hidden group">
+          <div className="absolute top-0 right-0 w-32 h-32 bg-blue-50 rounded-full blur-3xl -mr-10 -mt-10 transition-transform group-hover:scale-110"></div>
+          <div className="relative z-10">
+            <div className="flex justify-between items-start mb-6">
+              <div>
+                <h2 className="text-2xl font-bold text-gray-900 mb-1">
+                  Napi Kihívás
+                </h2>
+                <p className="text-sm text-gray-500 font-medium">{today}</p>
+              </div>
+            </div>
+
+            <Link
+              href="/daily"
+              className="block w-full text-center py-4 bg-gradient-to-r from-blue-600 to-indigo-600 text-white font-bold text-lg rounded-2xl hover:from-blue-700 hover:to-indigo-700 transition-all shadow-md hover:shadow-lg active:scale-95">
+              Játék Indítása
+            </Link>
+
+            <button className="w-full mt-3 py-3 text-blue-600 font-semibold text-sm rounded-2xl bg-blue-50 hover:bg-blue-100 transition-colors flex items-center justify-center gap-2">
+              <svg
+                className="w-4 h-4"
+                fill="none"
+                stroke="currentColor"
+                viewBox="0 0 24 24">
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  strokeWidth="2"
+                  d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"
+                />
+              </svg>
+              Korábbi napok
+            </button>
+          </div>
+        </div>
+
+        {/* Végtelen Mód Kártya (Inaktív) */}
+        <div className="bg-gray-50 rounded-3xl p-6 border-2 border-dashed border-gray-200 relative">
+          <div className="flex justify-between items-center mb-6 opacity-60">
+            <div>
+              <h2 className="text-xl font-bold text-gray-700 mb-1 flex items-center gap-2">
+                Végtelen Mód
+                <svg
+                  className="w-5 h-5"
+                  fill="none"
+                  stroke="currentColor"
+                  viewBox="0 0 24 24">
+                  <path
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    strokeWidth="2"
+                    d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z"
+                  />
+                </svg>
+              </h2>
+              <p className="text-xs text-gray-500 font-medium">
+                Gyakorlás téma alapján
+              </p>
+            </div>
+            <span className="bg-gray-200 text-gray-600 text-[10px] font-bold px-2 py-1 rounded-md uppercase tracking-wider">
+              Hamarosan
+            </span>
+          </div>
+          <button
+            disabled
+            className="w-full py-4 bg-gray-200 text-gray-400 font-bold text-lg rounded-2xl cursor-not-allowed">
+            Zárolva
+          </button>
+        </div>
+      </div>
+
+      {/* Alsó Menü Sáv */}
+      <div className="mt-12 mb-8 flex items-center gap-6 text-sm font-medium text-gray-500">
+        <button className="hover:text-gray-900 transition-colors flex flex-col items-center gap-1">
+          <svg
+            className="w-6 h-6"
+            fill="none"
+            stroke="currentColor"
+            viewBox="0 0 24 24">
+            <path
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              strokeWidth="2"
+              d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"
             />
-            Deploy Now
-          </a>
-          <a
-            className="flex h-12 w-full items-center justify-center rounded-full border border-solid border-black/[.08] px-5 transition-colors hover:border-transparent hover:bg-black/[.04] dark:border-white/[.145] dark:hover:bg-[#1a1a1a] md:w-[158px]"
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Documentation
-          </a>
-        </div>
-      </main>
-    </div>
+          </svg>
+          Ranglista
+        </button>
+        <button className="hover:text-gray-900 transition-colors flex flex-col items-center gap-1">
+          <svg
+            className="w-6 h-6"
+            fill="none"
+            stroke="currentColor"
+            viewBox="0 0 24 24">
+            <path
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              strokeWidth="2"
+              d="M3 5h12M9 3v2m1.048 9.5A18.022 18.022 0 016.412 9m6.088 9h7M11 21l5-10 5 10M12.751 5C11.783 10.77 8.07 15.61 3 18.129"
+            />
+          </svg>
+          Nyelv
+        </button>
+        <button className="hover:text-gray-900 transition-colors flex flex-col items-center gap-1">
+          <svg
+            className="w-6 h-6"
+            fill="none"
+            stroke="currentColor"
+            viewBox="0 0 24 24">
+            <path
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              strokeWidth="2"
+              d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"
+            />
+          </svg>
+          Súgó
+        </button>
+      </div>
+    </main>
   );
 }
