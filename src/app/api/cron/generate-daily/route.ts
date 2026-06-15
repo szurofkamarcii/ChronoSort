@@ -30,6 +30,7 @@ export async function GET(request: Request) {
     const today = new Date();
     const generatedDays: string[] = [];
 
+    // Végigmegyünk a mai naptól kezdve a következő 7 napon
     for (let i = 0; i <= 7; i++) {
       const targetDate = new Date(today);
       targetDate.setDate(targetDate.getDate() + i);
@@ -167,7 +168,6 @@ export async function GET(request: Request) {
             break;
           }
         } catch (innerError) {
-          // Ha bármelyik fázis (pl. JSON parse) elszáll ennél a kártyánál, ugrunk a következő eseményre
           console.error(
             "Hiba egy adott esemény feldolgozása közben:",
             innerError,
@@ -206,6 +206,11 @@ export async function GET(request: Request) {
           .upsert(insertData, { onConflict: "date, language" });
 
         generatedDays.push(targetDateStr);
+
+        // KILÉPÉS A FŐ CIKLUSBÓL:
+        // Miután 1 napot sikeresen pótolt, a script szándékosan befejezi a futást.
+        // Így garantáltan bent maradunk a 60 másodperces Vercel limitben!
+        break;
       }
     }
 
@@ -222,7 +227,7 @@ export async function GET(request: Request) {
     return NextResponse.json(
       {
         success: true,
-        message: `Sikeres generálás a következő napokra: ${generatedDays.join(", ")}`,
+        message: `Sikeres generálás a következő napra: ${generatedDays[0]}`,
         generatedDays,
       },
       { status: 200 },
