@@ -1,8 +1,6 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 
-// Vercel limit emelése 60 másodpercre (az ingyenes csomag maximuma),
-// hogy legyen ideje a SPARQL-nek lefutni több napra is!
 export const maxDuration = 60;
 
 const supabaseAdmin = createClient(
@@ -10,12 +8,11 @@ const supabaseAdmin = createClient(
   process.env.SUPABASE_SERVICE_ROLE_KEY!,
 );
 
-// Regex szanáló kizárólag a leírások (description) "spoilereinek" eltávolítására
+const WIKI_USER_AGENT = "ChronoSort-App/1.0 (Contact: admin@example.com)";
+
 function sanitizeDescription(text: string): string {
   if (!text) return text;
-  // 1. Zárójeles évszám blokkok teljes eltávolítása: pl. " (1914-1918)" -> ""
   let sanitized = text.replace(/\s*\([^)]*(?:1|2)\d{3}[^)]*\)/g, "");
-  // 2. Szabadon lévő évszámok és esetleges toldalékok maszkolása: pl. "1956-ban" -> "***"
   sanitized = sanitized.replace(
     /(?:1|2)\d{3}(?:-[a-záéíóöőúüűA-ZÁÉÍÓÖŐÚÜŰ]+)?/g,
     "***",
@@ -24,7 +21,6 @@ function sanitizeDescription(text: string): string {
 }
 
 export async function GET(request: Request) {
-  // Biztonsági ellenőrzés
   const authHeader = request.headers.get("authorization");
   if (authHeader !== `Bearer ${process.env.CRON_SECRET}`) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
@@ -34,7 +30,6 @@ export async function GET(request: Request) {
     const today = new Date();
     const generatedDays: string[] = [];
 
-    // Végigmegyünk a mai naptól kezdve a következő 7 napon
     for (let i = 0; i <= 7; i++) {
       const targetDate = new Date(today);
       targetDate.setDate(targetDate.getDate() + i);
@@ -43,7 +38,6 @@ export async function GET(request: Request) {
       const month = String(targetDate.getMonth() + 1).padStart(2, "0");
       const day = String(targetDate.getDate()).padStart(2, "0");
 
-      // 1. Megnézzük, le van-e már generálva ez a nap (elég az egyik nyelvet, pl. a magyart csekkolni)
       const { data: existing } = await supabaseAdmin
         .from("daily_challenges")
         .select("id")
@@ -51,16 +45,13 @@ export async function GET(request: Request) {
         .eq("language", "hu")
         .maybeSingle();
 
-      // Ha már létezik, ugorjunk a következő napra
-      if (existing) {
-        continue;
-      }
+      if (existing) continue;
 
-      // HA NINCS ADAT ERRE A NAPRA: Lefuttatjuk a te logikádat!
       const wikiRes = await fetch(
         `https://api.wikimedia.org/feed/v1/wikipedia/en/onthisday/events/${month}/${day}`,
+        { headers: { "User-Agent": WIKI_USER_AGENT } },
       );
-      if (!wikiRes.ok) continue; // Ha a wiki épp nem elérhető, ugrunk
+      if (!wikiRes.ok) continue;
 
       const wikiData = await wikiRes.json();
       const events = wikiData.events;
@@ -68,7 +59,7 @@ export async function GET(request: Request) {
       let rawResults: any = null;
       let selectedThemeQid = "";
       let attempts = 0;
-      const maxAttempts = 3;
+      const maxAttempts = 5;
 
       const shuffledEvents = events.sort(() => 0.5 - Math.random());
 
@@ -76,96 +67,115 @@ export async function GET(request: Request) {
         if (attempts >= maxAttempts) break;
         attempts++;
 
-        const mainPage = event.pages[0];
-        if (!mainPage || !mainPage.titles || !mainPage.titles.normalized)
-          continue;
-
-        const articleTitle = mainPage.titles.normalized;
-
-        const propsRes = await fetch(
-          `https://en.wikipedia.org/w/api.php?action=query&prop=pageprops&titles=${encodeURIComponent(articleTitle)}&format=json`,
-        );
-        const propsData = await propsRes.json();
-        const pages = propsData.query.pages;
-        const pageId = Object.keys(pages)[0];
-        const qid = pages[pageId]?.pageprops?.wikibase_item;
-
-        if (!qid) continue;
-
-        const entityRes = await fetch(
-          `https://www.wikidata.org/w/api.php?action=wbgetclaims&entity=${qid}&property=P31&format=json`,
-        );
-        const entityData = await entityRes.json();
-        const p31Claim = entityData.claims?.P31?.[0];
-        const themeQid = p31Claim?.mainsnak?.datavalue?.value?.id;
-
-        if (!themeQid) continue;
-        selectedThemeQid = themeQid;
-
-        const sparqlQuery = `
-          SELECT DISTINCT ?entity ?image ?date
-            ?label_en ?desc_en
-            ?label_hu ?desc_hu
-            ?label_es ?desc_es
-          WHERE {
-            ?entity wdt:P31 wd:${themeQid}; 
-                    wdt:P18 ?image.     
-            
-            ?entity wdt:P571 | wdt:P577 | wdt:P585 | wdt:P580 ?date.
-
-            ?entity rdfs:label ?label_en. FILTER(LANG(?label_en) = "en")
-            ?entity rdfs:label ?label_hu. FILTER(LANG(?label_hu) = "hu")
-            ?entity rdfs:label ?label_es. FILTER(LANG(?label_es) = "es")
-
-            ?entity schema:description ?desc_en. FILTER(LANG(?desc_en) = "en")
-            ?entity schema:description ?desc_hu. FILTER(LANG(?desc_hu) = "hu")
-            ?entity schema:description ?desc_es. FILTER(LANG(?desc_es) = "es")
-          }
-          LIMIT 50
-        `;
-
-        const sparqlUrl = `https://query.wikidata.org/sparql?query=${encodeURIComponent(sparqlQuery)}&format=json`;
-        const sparqlRes = await fetch(sparqlUrl, {
-          headers: {
-            "User-Agent": "ChronoSort-App/1.0 (Contact: admin@example.com)",
-          },
-        });
-
-        const sparqlData = await sparqlRes.json();
-        const results = sparqlData.results.bindings;
-
-        const uniqueEntities = new Map();
-        const yearRegex = /(?:1|2)\d{3}/;
-
-        for (const item of results) {
-          const id = item.entity.value.split("/").pop();
-
-          const titleEn = item.label_en.value;
-          const titleHu = item.label_hu.value;
-          const titleEs = item.label_es.value;
-
-          if (
-            yearRegex.test(titleEn) ||
-            yearRegex.test(titleHu) ||
-            yearRegex.test(titleEs)
-          ) {
+        try {
+          const mainPage = event.pages[0];
+          if (!mainPage || !mainPage.titles || !mainPage.titles.normalized)
             continue;
+
+          const articleTitle = mainPage.titles.normalized;
+
+          const propsRes = await fetch(
+            `https://en.wikipedia.org/w/api.php?action=query&prop=pageprops&titles=${encodeURIComponent(articleTitle)}&format=json`,
+            { headers: { "User-Agent": WIKI_USER_AGENT } },
+          );
+          if (!propsRes.ok) continue;
+
+          const propsData = await propsRes.json();
+          const pages = propsData?.query?.pages;
+          if (!pages) continue;
+
+          const pageId = Object.keys(pages)[0];
+          const qid = pages[pageId]?.pageprops?.wikibase_item;
+
+          if (!qid) continue;
+
+          const entityRes = await fetch(
+            `https://www.wikidata.org/w/api.php?action=wbgetclaims&entity=${qid}&property=P31&format=json`,
+            { headers: { "User-Agent": WIKI_USER_AGENT } },
+          );
+          if (!entityRes.ok) continue;
+
+          const entityData = await entityRes.json();
+          const p31Claim = entityData?.claims?.P31?.[0];
+          const themeQid = p31Claim?.mainsnak?.datavalue?.value?.id;
+
+          if (!themeQid) continue;
+          selectedThemeQid = themeQid;
+
+          const sparqlQuery = `
+            SELECT DISTINCT ?entity ?image ?date
+              ?label_en ?desc_en
+              ?label_hu ?desc_hu
+              ?label_es ?desc_es
+            WHERE {
+              ?entity wdt:P31 wd:${themeQid}; 
+                      wdt:P18 ?image.     
+              
+              ?entity wdt:P571 | wdt:P577 | wdt:P585 | wdt:P580 ?date.
+
+              ?entity rdfs:label ?label_en. FILTER(LANG(?label_en) = "en")
+              ?entity rdfs:label ?label_hu. FILTER(LANG(?label_hu) = "hu")
+              ?entity rdfs:label ?label_es. FILTER(LANG(?label_es) = "es")
+
+              ?entity schema:description ?desc_en. FILTER(LANG(?desc_en) = "en")
+              ?entity schema:description ?desc_hu. FILTER(LANG(?desc_hu) = "hu")
+              ?entity schema:description ?desc_es. FILTER(LANG(?desc_es) = "es")
+            }
+            LIMIT 50
+          `;
+
+          const sparqlUrl = `https://query.wikidata.org/sparql?query=${encodeURIComponent(sparqlQuery)}&format=json`;
+          const sparqlRes = await fetch(sparqlUrl, {
+            headers: {
+              "User-Agent": WIKI_USER_AGENT,
+              Accept: "application/sparql-results+json",
+            },
+          });
+          if (!sparqlRes.ok) continue;
+
+          const sparqlData = await sparqlRes.json();
+          const results = sparqlData?.results?.bindings;
+          if (!results) continue;
+
+          const uniqueEntities = new Map();
+          const yearRegex = /(?:1|2)\d{3}/;
+
+          for (const item of results) {
+            const id = item.entity.value.split("/").pop();
+
+            const titleEn = item.label_en?.value || "";
+            const titleHu = item.label_hu?.value || "";
+            const titleEs = item.label_es?.value || "";
+
+            if (
+              yearRegex.test(titleEn) ||
+              yearRegex.test(titleHu) ||
+              yearRegex.test(titleEs)
+            ) {
+              continue;
+            }
+
+            if (!uniqueEntities.has(id)) {
+              uniqueEntities.set(id, item);
+            }
+
+            if (uniqueEntities.size === 6) break;
           }
 
-          if (!uniqueEntities.has(id)) {
-            uniqueEntities.set(id, item);
+          if (uniqueEntities.size === 6) {
+            rawResults = Array.from(uniqueEntities.values());
+            break;
           }
-
-          if (uniqueEntities.size === 6) break;
+        } catch (innerError) {
+          // Ha bármelyik fázis (pl. JSON parse) elszáll ennél a kártyánál, ugrunk a következő eseményre
+          console.error(
+            "Hiba egy adott esemény feldolgozása közben:",
+            innerError,
+          );
+          continue;
         }
+      }
 
-        if (uniqueEntities.size === 6) {
-          rawResults = Array.from(uniqueEntities.values());
-          break; // Megvan a 6, kitörünk a SPARQL ciklusból
-        }
-      } // -- End of Events loop
-
-      // Ha megvan a nyers eredményünk, alakítsuk át a nyelvi mutációkra és mentsük le
       if (rawResults) {
         const languages = ["en", "hu", "es"] as const;
         const insertData = languages.map((lang) => {
@@ -173,8 +183,8 @@ export async function GET(request: Request) {
             id: item.entity.value.split("/").pop(),
             image_url: item.image.value,
             date: item.date.value.split("T")[0],
-            title: item[`label_${lang}`].value,
-            description: sanitizeDescription(item[`desc_${lang}`].value),
+            title: item[`label_${lang}`]?.value || "Ismeretlen",
+            description: sanitizeDescription(item[`desc_${lang}`]?.value || ""),
           }));
 
           localizedCards.sort(
@@ -191,14 +201,13 @@ export async function GET(request: Request) {
           };
         });
 
-        // Betoljuk az adatbázisba
         await supabaseAdmin
           .from("daily_challenges")
           .upsert(insertData, { onConflict: "date, language" });
 
         generatedDays.push(targetDateStr);
       }
-    } // -- End of 7 days loop
+    }
 
     if (generatedDays.length === 0) {
       return NextResponse.json(
@@ -219,6 +228,7 @@ export async function GET(request: Request) {
       { status: 200 },
     );
   } catch (error: any) {
+    console.error("Kritikus cron hiba:", error);
     return NextResponse.json({ error: error.message }, { status: 500 });
   }
 }
