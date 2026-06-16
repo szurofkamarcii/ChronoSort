@@ -52,15 +52,21 @@ export async function GET(request: Request) {
         `https://api.wikimedia.org/feed/v1/wikipedia/en/onthisday/events/${month}/${day}`,
         { headers: { "User-Agent": WIKI_USER_AGENT } },
       );
-      if (!wikiRes.ok) continue;
+      if (!wikiRes.ok) {
+        console.error(
+          `Wikipedia API hiba a ${month}/${day} napra: ${wikiRes.status}`,
+        );
+        continue;
+      }
 
       const wikiData = await wikiRes.json();
       const events = wikiData.events;
+      if (!events || !Array.isArray(events)) continue;
 
       let rawResults: any = null;
       let selectedThemeQid = "";
       let attempts = 0;
-      const maxAttempts = 5;
+      const maxAttempts = 15; // <--- MEGEMELVE 5-ről 15-re, hogy biztos találjon jó témát
 
       const shuffledEvents = events.sort(() => 0.5 - Math.random());
 
@@ -72,7 +78,6 @@ export async function GET(request: Request) {
           const mainPage = event.pages[0];
           if (!mainPage || !mainPage.titles || !mainPage.titles.normalized)
             continue;
-
           const articleTitle = mainPage.titles.normalized;
 
           const propsRes = await fetch(
@@ -87,7 +92,6 @@ export async function GET(request: Request) {
 
           const pageId = Object.keys(pages)[0];
           const qid = pages[pageId]?.pageprops?.wikibase_item;
-
           if (!qid) continue;
 
           const entityRes = await fetch(
@@ -99,13 +103,13 @@ export async function GET(request: Request) {
           const entityData = await entityRes.json();
           const p31Claim = entityData?.claims?.P31?.[0];
           const themeQid = p31Claim?.mainsnak?.datavalue?.value?.id;
-
           if (!themeQid) continue;
+
           selectedThemeQid = themeQid;
 
-          // ÚJ SPARQL LEKÉRDEZÉS A DÁTUM TÍPUSÁVAL
+          // VISSZAÁLLÍTVA A GYORS QUERYRE, de kifűzzük a property nevét is
           const sparqlQuery = `
-            SELECT DISTINCT ?entity ?image ?date ?dateProp
+            SELECT DISTINCT ?entity ?image ?date ?datePropStr
               ?label_en ?desc_en
               ?label_hu ?desc_hu
               ?label_es ?desc_es
@@ -113,8 +117,13 @@ export async function GET(request: Request) {
               ?entity wdt:P31 wd:${themeQid}; 
                       wdt:P18 ?image.     
               
-              VALUES ?dateProp { wdt:P571 wdt:P577 wdt:P585 wdt:P580 }
-              ?entity ?dateProp ?date.
+              ?entity wdt:P571 | wdt:P577 | wdt:P585 | wdt:P580 ?date.
+
+              OPTIONAL { ?entity wdt:P571 ?d1. BIND("P571" AS ?prop1) }
+              OPTIONAL { ?entity wdt:P577 ?d2. BIND("P577" AS ?prop2) }
+              OPTIONAL { ?entity wdt:P585 ?d3. BIND("P585" AS ?prop3) }
+              OPTIONAL { ?entity wdt:P580 ?d4. BIND("P580" AS ?prop4) }
+              BIND(COALESCE(?prop1, ?prop2, ?prop3, ?prop4) AS ?datePropStr)
 
               ?entity rdfs:label ?label_en. FILTER(LANG(?label_en) = "en")
               ?entity rdfs:label ?label_hu. FILTER(LANG(?label_hu) = "hu")
@@ -145,7 +154,6 @@ export async function GET(request: Request) {
 
           for (const item of results) {
             const id = item.entity.value.split("/").pop();
-
             const titleEn = item.label_en?.value || "";
             const titleHu = item.label_hu?.value || "";
             const titleEs = item.label_es?.value || "";
@@ -167,7 +175,7 @@ export async function GET(request: Request) {
 
           if (uniqueEntities.size === 6) {
             rawResults = Array.from(uniqueEntities.values());
-            break;
+            break; // Sikerült, kilépünk az events ciklusból
           }
         } catch (innerError) {
           console.error(
@@ -182,7 +190,7 @@ export async function GET(request: Request) {
         // DOMINÁNS DÁTUMTÍPUS KISZÁMOLÁSA
         const propCounts: Record<string, number> = {};
         rawResults.forEach((item: any) => {
-          const propId = item.dateProp.value.split("/").pop(); // PL: P571
+          const propId = item.datePropStr?.value || "P585";
           propCounts[propId] = (propCounts[propId] || 0) + 1;
         });
         const dominantProp = Object.keys(propCounts).reduce((a, b) =>
@@ -208,20 +216,22 @@ export async function GET(request: Request) {
             date: targetDateStr,
             language: lang,
             theme: selectedThemeQid,
-            date_property: dominantProp, // <--- ELMENTJÜK A DÁTUM TÍPUSÁT
+            date_property: dominantProp, // <--- ITT MENTJÜK EL!
             events_json: localizedCards,
             is_approved: true,
           };
         });
 
-        await supabaseAdmin
+        const { error: upsertError } = await supabaseAdmin
           .from("daily_challenges")
           .upsert(insertData, { onConflict: "date, language" });
 
-        generatedDays.push(targetDateStr);
+        if (upsertError) {
+          console.error("Supabase upsert hiba:", upsertError);
+        }
 
-        // KILÉPÉS A FŐ CIKLUSBÓL:
-        break;
+        generatedDays.push(targetDateStr);
+        break; // Egy nap sikeres generálása után kilép a Vercel 60mp limit miatt
       }
     }
 
@@ -229,7 +239,7 @@ export async function GET(request: Request) {
       return NextResponse.json(
         {
           message:
-            "Minden nap le van generálva a következő 7 napra, nincs teendő.",
+            "Nem sikerült új napot generálni. Talán a Wikidata nem adott vissza 6 elemes találatot 15 kísérletből sem.",
         },
         { status: 200 },
       );
