@@ -8,7 +8,9 @@ const supabaseAdmin = createClient(
   process.env.SUPABASE_SERVICE_ROLE_KEY!,
 );
 
-const WIKI_USER_AGENT = "ChronoSort-App/1.0 (Contact: admin@example.com)";
+// FONTOS: Cseréld ki egy valós email címre, hogy a Wikipédia ne tiltsa le a botodat!
+const WIKI_USER_AGENT =
+  "ChronoSortBot/1.0 (https://chronosort.app; info@chronosort.app)";
 
 function sanitizeDescription(text: string): string {
   if (!text) return text;
@@ -20,6 +22,9 @@ function sanitizeDescription(text: string): string {
   return sanitized.trim();
 }
 
+// Segédfüggvény a várakozáshoz (Rate Limit elkerülése miatt)
+const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
 export async function GET(request: Request) {
   const authHeader = request.headers.get("authorization");
   if (authHeader !== `Bearer ${process.env.CRON_SECRET}`) {
@@ -30,7 +35,7 @@ export async function GET(request: Request) {
     const today = new Date();
     const generatedDays: string[] = [];
 
-    // Végigmegyünk a mai naptól kezdve a következő 7 napon
+    // Végigmegyünk a MAI NAPTÓL (i = 0) kezdve a következő 7 napon
     for (let i = 0; i <= 7; i++) {
       const targetDate = new Date(today);
       targetDate.setDate(targetDate.getDate() + i);
@@ -39,6 +44,7 @@ export async function GET(request: Request) {
       const month = String(targetDate.getMonth() + 1).padStart(2, "0");
       const day = String(targetDate.getDate()).padStart(2, "0");
 
+      // 1. Ellenőrizzük, megvan-e már az adott nap
       const { data: existing } = await supabaseAdmin
         .from("daily_challenges")
         .select("id")
@@ -46,18 +52,22 @@ export async function GET(request: Request) {
         .eq("language", "hu")
         .maybeSingle();
 
-      if (existing) continue;
+      if (existing) continue; // Ha megvan, megyünk a következő napra
 
+      // 2. Wikipedia On This Day API
       const wikiRes = await fetch(
         `https://api.wikimedia.org/feed/v1/wikipedia/en/onthisday/events/${month}/${day}`,
         { headers: { "User-Agent": WIKI_USER_AGENT } },
       );
-      if (!wikiRes.ok) {
+
+      // Ha 429-et kapunk, azonnal megszakítjuk a teljes folyamatot!
+      if (wikiRes.status === 429) {
         console.error(
-          `Wikipedia API hiba a ${month}/${day} napra: ${wikiRes.status}`,
+          `Rate limit (429) a ${month}/${day} napnál. Leállás, hogy elkerüljük a tiltást.`,
         );
-        continue;
+        break;
       }
+      if (!wikiRes.ok) continue;
 
       const wikiData = await wikiRes.json();
       const events = wikiData.events;
@@ -66,7 +76,7 @@ export async function GET(request: Request) {
       let rawResults: any = null;
       let selectedThemeQid = "";
       let attempts = 0;
-      const maxAttempts = 15; // <--- MEGEMELVE 5-ről 15-re, hogy biztos találjon jó témát
+      const maxAttempts = 15;
 
       const shuffledEvents = events.sort(() => 0.5 - Math.random());
 
@@ -79,6 +89,9 @@ export async function GET(request: Request) {
           if (!mainPage || !mainPage.titles || !mainPage.titles.normalized)
             continue;
           const articleTitle = mainPage.titles.normalized;
+
+          // Pihenünk fél másodpercet a Wikipédia / Wikidata API hívások között
+          await delay(500);
 
           const propsRes = await fetch(
             `https://en.wikipedia.org/w/api.php?action=query&prop=pageprops&titles=${encodeURIComponent(articleTitle)}&format=json`,
@@ -94,6 +107,8 @@ export async function GET(request: Request) {
           const qid = pages[pageId]?.pageprops?.wikibase_item;
           if (!qid) continue;
 
+          await delay(500); // Újabb pihenő
+
           const entityRes = await fetch(
             `https://www.wikidata.org/w/api.php?action=wbgetclaims&entity=${qid}&property=P31&format=json`,
             { headers: { "User-Agent": WIKI_USER_AGENT } },
@@ -107,7 +122,8 @@ export async function GET(request: Request) {
 
           selectedThemeQid = themeQid;
 
-          // VISSZAÁLLÍTVA A GYORS QUERYRE, de kifűzzük a property nevét is
+          await delay(500); // Pihenő a nehéz SPARQL előtt
+
           const sparqlQuery = `
             SELECT DISTINCT ?entity ?image ?date ?datePropStr
               ?label_en ?desc_en
@@ -175,7 +191,7 @@ export async function GET(request: Request) {
 
           if (uniqueEntities.size === 6) {
             rawResults = Array.from(uniqueEntities.values());
-            break; // Sikerült, kilépünk az events ciklusból
+            break;
           }
         } catch (innerError) {
           console.error(
@@ -216,7 +232,7 @@ export async function GET(request: Request) {
             date: targetDateStr,
             language: lang,
             theme: selectedThemeQid,
-            date_property: dominantProp, // <--- ITT MENTJÜK EL!
+            date_property: dominantProp,
             events_json: localizedCards,
             is_approved: true,
           };
@@ -231,7 +247,7 @@ export async function GET(request: Request) {
         }
 
         generatedDays.push(targetDateStr);
-        break; // Egy nap sikeres generálása után kilép a Vercel 60mp limit miatt
+        break; // Sikeres nap generálása után kilépünk, hogy ne fussunk ki a Vercel 60 másodpercéből!
       }
     }
 
@@ -239,7 +255,7 @@ export async function GET(request: Request) {
       return NextResponse.json(
         {
           message:
-            "Nem sikerült új napot generálni. Talán a Wikidata nem adott vissza 6 elemes találatot 15 kísérletből sem.",
+            "Nincs generált nap. Lehet, hogy már minden megvan, vagy a Wikidata API blokkolt.",
         },
         { status: 200 },
       );
