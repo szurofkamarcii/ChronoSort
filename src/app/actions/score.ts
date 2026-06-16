@@ -137,3 +137,52 @@ export async function getArchiveData() {
 
   return { availableDates, userScores };
 }
+
+// ÚJ: Archívum adatok lekérése (Létező napok + a játékos eredményei)
+export async function getArchiveStats() {
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+
+  // Mai nap meghatározása magyar idő szerint, hogy a jövőbeli napokat ne mutassuk
+  const formatter = new Intl.DateTimeFormat("hu-HU", {
+    timeZone: "Europe/Budapest",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  });
+  const parts = formatter.formatToParts(new Date());
+  const todayStr = `${parts.find((p) => p.type === "year")?.value}-${parts.find((p) => p.type === "month")?.value}-${parts.find((p) => p.type === "day")?.value}`;
+
+  // 1. Lekérjük az összes eddigi (mai vagy régebbi) legenerált napot
+  const { data: challenges } = await supabase
+    .from("daily_challenges")
+    .select("date")
+    .eq("language", "hu")
+    .lte("date", todayStr)
+    .order("date", { ascending: false });
+
+  const availableDates = challenges?.map((c) => c.date) || [];
+
+  // 2. Lekérjük a felhasználó saját eddigi pontszámait (ha be van lépve)
+  const userScores: Record<string, { won: boolean; score: number }> = {};
+
+  if (user) {
+    const { data: scores } = await supabase
+      .from("daily_scores")
+      .select("date, score")
+      .eq("user_id", user.id);
+
+    if (scores) {
+      scores.forEach((s) => {
+        userScores[s.date] = {
+          won: s.score > 0,
+          score: s.score,
+        };
+      });
+    }
+  }
+
+  return { success: true, availableDates, userScores };
+}

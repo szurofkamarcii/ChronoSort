@@ -1,7 +1,6 @@
 "use client";
 
 import React, { useState, useEffect, forwardRef } from "react";
-import { getHungarianDateString } from "@/lib/dateUtils";
 import {
   DndContext,
   closestCenter,
@@ -40,6 +39,9 @@ interface GameBoardProps {
   initialCards: CardData[];
   user?: any | null;
   existingScore?: any | null;
+  theme?: string | null;
+  gameDate: string;
+  dateProperty?: string | null;
 }
 
 const MAX_ATTEMPTS = 5;
@@ -248,6 +250,9 @@ export default function GameBoard({
   initialCards,
   user = null,
   existingScore = null,
+  gameDate,
+  theme,
+  dateProperty,
 }: GameBoardProps) {
   const [cards, setCards] = useState<CardData[]>([]);
   const [isClient, setIsClient] = useState(false);
@@ -297,8 +302,7 @@ export default function GameBoard({
 
     // Ranglista betöltése
     setIsLoadingLeaderboard(true);
-    const todayStr = getHungarianDateString();
-    getContextualLeaderboard(todayStr, user?.id).then((lbRes) => {
+    getContextualLeaderboard(gameDate, user?.id).then((lbRes) => {
       if (lbRes.success) setLeaderboard(lbRes.data);
       setIsLoadingLeaderboard(false);
     });
@@ -317,8 +321,6 @@ export default function GameBoard({
   useEffect(() => {
     if (!initialCards || initialCards.length === 0) return;
 
-    const todayStr = getHungarianDateString();
-
     // 1. Ha adatbázis szerint már játszott ma
     if (existingScore) {
       setupFinishedState(existingScore);
@@ -327,11 +329,11 @@ export default function GameBoard({
     }
 
     // 2. Ha a LocalStorage szerint (vendégként) már játszott ma
-    const localPlayed = localStorage.getItem("played_today");
+    const localPlayed = localStorage.getItem(`played_${gameDate}`);
     if (localPlayed) {
       try {
         const parsed = JSON.parse(localPlayed);
-        if (parsed.date === todayStr) {
+        if (parsed.date === gameDate) {
           setupFinishedState(parsed);
           setIsClient(true);
           return;
@@ -357,6 +359,13 @@ export default function GameBoard({
     setStartTime(Date.now());
   }, [initialCards, existingScore]);
 
+  // Idővonal szélsőértékeinek kiszámítása
+  const sortedYears = [...initialCards]
+    .map((c) => new Date(c.date).getFullYear())
+    .sort((a, b) => a - b);
+  const minYear = sortedYears[0];
+  const maxYear = sortedYears[sortedYears.length - 1];
+
   // Cooldown időzítő
   useEffect(() => {
     if (cooldown > 0) {
@@ -372,21 +381,18 @@ export default function GameBoard({
       if (pendingScoreStr) {
         try {
           const pendingScore = JSON.parse(pendingScoreStr);
-          const todayStr = getHungarianDateString();
-
-          if (pendingScore.date === todayStr) {
+          if (pendingScore.date === gameDate) {
             setIsSaving(true);
             saveDailyScore(
               pendingScore.attempts,
               pendingScore.score,
               pendingScore.time_seconds,
-              todayStr,
+              gameDate, // <--- todayStr helyett gameDate
             ).then((res) => {
               if (res.success) {
                 setScoreSaved(true);
                 localStorage.removeItem("pending_score");
-                // Sikeres mentés után frissítjük a ranglistát, hogy a User lássa a nevét!
-                getContextualLeaderboard(todayStr, user.id).then((lbRes) => {
+                getContextualLeaderboard(gameDate, user.id).then((lbRes) => {
                   if (lbRes.success) setLeaderboard(lbRes.data);
                 });
               }
@@ -519,14 +525,13 @@ export default function GameBoard({
       saveScoreToDBorLocal(totalAttempts, calculatedScore, elapsedSeconds);
 
       // Megjegyezzük helyben, hogy játszott
-      const todayStr = getHungarianDateString();
       localStorage.setItem(
-        "played_today",
+        `played_${gameDate}`,
         JSON.stringify({
           attempts: totalAttempts,
           score: calculatedScore,
           time_seconds: elapsedSeconds,
-          date: todayStr,
+          date: gameDate,
         }),
       );
     } else {
@@ -545,14 +550,13 @@ export default function GameBoard({
 
         saveScoreToDBorLocal(totalAttempts, 0, elapsedSeconds);
 
-        const todayStr = getHungarianDateString();
         localStorage.setItem(
-          "played_today",
+          `played_${gameDate}`,
           JSON.stringify({
             attempts: totalAttempts,
             score: 0,
             time_seconds: elapsedSeconds,
-            date: todayStr,
+            date: gameDate,
           }),
         );
       } else {
@@ -566,10 +570,9 @@ export default function GameBoard({
     score: number,
     time: number,
   ) => {
-    const todayStr = getHungarianDateString();
     if (user) {
       setIsSaving(true);
-      saveDailyScore(attempts, score, time, todayStr).then((res) => {
+      saveDailyScore(attempts, score, time, gameDate).then((res) => {
         if (res.success) setScoreSaved(true);
         setIsSaving(false);
       });
@@ -580,7 +583,7 @@ export default function GameBoard({
           attempts: attempts,
           score: score,
           time_seconds: time,
-          date: todayStr,
+          date: gameDate,
         }),
       );
     }
@@ -588,11 +591,10 @@ export default function GameBoard({
 
   const generateShareText = () => {
     const grid = attemptsLog.map((log) => log.join("")).join("\n");
-    const todayStr = new Date().toLocaleDateString("hu-HU");
     const resultText = isWon
       ? `${finalScore} pont (${attemptsLog.length}/5 próbálkozás, ${timeTaken}mp)`
       : `Elbukott (0 pont)`;
-    return `ChronoSort - ${todayStr}\nEredmény: ${resultText}\n\n${grid}\n\nJátssz te is: https://chronosort.app`;
+    return `ChronoSort - ${gameDate}\nEredmény: ${resultText}\n\n${grid}\n\nJátssz te is: https://chronosort.app`;
   };
 
   const handleShareClick = async () => {
@@ -679,6 +681,21 @@ export default function GameBoard({
       <div className="animate-pulse h-64 w-full max-w-5xl bg-gray-200 rounded-3xl mx-auto"></div>
     );
 
+  const getQuestionText = () => {
+    switch (dateProperty) {
+      case "P571":
+        return "Mikor alapították / jött létre?";
+      case "P577":
+        return "Mikor adták ki / jelent meg?";
+      case "P585":
+        return "Mikor történt az esemény?";
+      case "P580":
+        return "Mikor kezdődött?";
+      default:
+        return "Mikor történt a legkorábbi esemény?";
+    }
+  };
+
   return (
     <div className="w-full flex flex-col items-center">
       {/* Cím alatti info az életekről */}
@@ -757,6 +774,31 @@ export default function GameBoard({
         )}
       </div>
 
+      {/* Játék kontextus */}
+      <div className="w-full max-w-4xl text-center mb-6 bg-white p-4 rounded-2xl shadow-sm border border-gray-100">
+        <h2 className="text-xl font-bold text-gray-800 flex items-center justify-center gap-2">
+          <svg
+            className="w-5 h-5 text-blue-500"
+            fill="none"
+            stroke="currentColor"
+            viewBox="0 0 24 24">
+            <path
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              strokeWidth="2"
+              d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"
+            />
+          </svg>
+          {theme ? `Téma: ${theme}` : "Történelmi események"}
+        </h2>
+        <p className="text-sm text-gray-600 font-medium mt-2">
+          Rendezd a kártyákat időrendbe:{" "}
+          <span className="font-bold text-blue-600 bg-blue-50 px-1.5 py-0.5 rounded">
+            {getQuestionText()}
+          </span>
+        </p>
+      </div>
+
       <div
         className={`relative w-full max-w-sm md:max-w-6xl mx-auto px-4 md:p-4 flex justify-center transition-opacity ${cooldown > 0 ? "opacity-80" : ""}`}>
         <div className="absolute inset-0 flex flex-col md:flex-row gap-2 md:gap-6 items-center justify-center px-4 md:p-4 z-20 pointer-events-none">
@@ -829,8 +871,16 @@ export default function GameBoard({
           onDragStart={handleDragStart}
           onDragEnd={handleDragEnd}
           onDragCancel={() => setActiveId(null)}>
-          <div className="flex flex-col md:flex-row gap-2 md:gap-6 items-center justify-center w-full z-10">
-            <div className="hidden md:block absolute top-1/2 left-8 right-8 h-2 bg-gradient-to-r from-gray-200 via-gray-300 to-gray-200 -translate-y-1/2 z-0 rounded-full shadow-inner pointer-events-none"></div>
+          <div className="flex flex-col md:flex-row gap-2 md:gap-6 items-center justify-center w-full z-10 relative">
+            {/* Idővonal Háttér Sáv - Évszámokkal */}
+            <div className="hidden md:flex absolute top-1/2 left-2 right-2 h-3 bg-gray-200 -translate-y-1/2 rounded-full z-0 justify-between items-center px-3 shadow-inner pointer-events-none">
+              <span className="text-xs font-black text-gray-500 bg-white px-2 py-1 rounded shadow-sm border border-gray-200">
+                {minYear}
+              </span>
+              <span className="text-xs font-black text-gray-500 bg-white px-2 py-1 rounded shadow-sm border border-gray-200">
+                {maxYear}
+              </span>
+            </div>
 
             <SortableContext items={sortableIds} strategy={rectSortingStrategy}>
               {cards.map((card, index) => {

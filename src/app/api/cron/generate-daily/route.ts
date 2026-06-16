@@ -103,8 +103,9 @@ export async function GET(request: Request) {
           if (!themeQid) continue;
           selectedThemeQid = themeQid;
 
+          // ÚJ SPARQL LEKÉRDEZÉS A DÁTUM TÍPUSÁVAL
           const sparqlQuery = `
-            SELECT DISTINCT ?entity ?image ?date
+            SELECT DISTINCT ?entity ?image ?date ?dateProp
               ?label_en ?desc_en
               ?label_hu ?desc_hu
               ?label_es ?desc_es
@@ -112,7 +113,8 @@ export async function GET(request: Request) {
               ?entity wdt:P31 wd:${themeQid}; 
                       wdt:P18 ?image.     
               
-              ?entity wdt:P571 | wdt:P577 | wdt:P585 | wdt:P580 ?date.
+              VALUES ?dateProp { wdt:P571 wdt:P577 wdt:P585 wdt:P580 }
+              ?entity ?dateProp ?date.
 
               ?entity rdfs:label ?label_en. FILTER(LANG(?label_en) = "en")
               ?entity rdfs:label ?label_hu. FILTER(LANG(?label_hu) = "hu")
@@ -177,6 +179,16 @@ export async function GET(request: Request) {
       }
 
       if (rawResults) {
+        // DOMINÁNS DÁTUMTÍPUS KISZÁMOLÁSA
+        const propCounts: Record<string, number> = {};
+        rawResults.forEach((item: any) => {
+          const propId = item.dateProp.value.split("/").pop(); // PL: P571
+          propCounts[propId] = (propCounts[propId] || 0) + 1;
+        });
+        const dominantProp = Object.keys(propCounts).reduce((a, b) =>
+          propCounts[a] > propCounts[b] ? a : b,
+        );
+
         const languages = ["en", "hu", "es"] as const;
         const insertData = languages.map((lang) => {
           const localizedCards = rawResults.map((item: any) => ({
@@ -196,6 +208,7 @@ export async function GET(request: Request) {
             date: targetDateStr,
             language: lang,
             theme: selectedThemeQid,
+            date_property: dominantProp, // <--- ELMENTJÜK A DÁTUM TÍPUSÁT
             events_json: localizedCards,
             is_approved: true,
           };
@@ -208,8 +221,6 @@ export async function GET(request: Request) {
         generatedDays.push(targetDateStr);
 
         // KILÉPÉS A FŐ CIKLUSBÓL:
-        // Miután 1 napot sikeresen pótolt, a script szándékosan befejezi a futást.
-        // Így garantáltan bent maradunk a 60 másodperces Vercel limitben!
         break;
       }
     }

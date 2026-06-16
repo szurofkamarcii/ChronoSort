@@ -26,7 +26,11 @@ export default function UserMenu({ user }: { user: any }) {
           </div>
         </div>
         <button
-          onClick={() => signOut()}
+          onClick={async () => {
+            localStorage.removeItem("played_today");
+            localStorage.removeItem("pending_score");
+            await signOut();
+          }}
           className="w-full py-2.5 bg-gray-50 hover:bg-red-50 text-gray-600 hover:text-red-600 text-sm font-bold rounded-xl transition-colors border border-gray-100 hover:border-red-100">
           Kijelentkezés
         </button>
