@@ -1,12 +1,20 @@
 import { createClient } from "@/lib/supabase/server";
 import GameBoard from "@/components/GameBoard";
 import Link from "next/link";
+import NicknameModal from "@/components/NicknameModal";
+import { getHungarianDateString } from "@/lib/dateUtils"; // ÚJ IMPORT
 
-export default async function DailyGamePage() {
+// Cseréld a DailyGamePage függvény elejét erre:
+export default async function DailyGamePage({
+  searchParams,
+}: {
+  searchParams: { date?: string };
+}) {
   const supabase = await createClient();
-  const today = new Date().toISOString().split("T")[0];
 
-  // Ellenőrizzük, be van-e jelentkezve a felhasználó
+  // Archívumból jövő URL paraméter (?date=2024-05-10) vagy a MAI NAP
+  const today = searchParams.date || getHungarianDateString();
+
   const {
     data: { user },
   } = await supabase.auth.getUser();
@@ -34,6 +42,19 @@ export default async function DailyGamePage() {
     );
   }
 
+  // ÚJ: Megnézzük, hogy a user játszott-e már ma!
+  let existingScore = null;
+  if (user) {
+    const { data } = await supabase
+      .from("daily_scores")
+      .select("*")
+      .eq("date", today)
+      .eq("user_id", user.id)
+      .maybeSingle();
+
+    if (data) existingScore = data;
+  }
+
   return (
     <main className="min-h-screen bg-gray-50 flex flex-col items-center p-4 md:p-10 font-sans">
       <div className="w-full max-w-6xl mx-auto mb-4 md:mb-8 flex justify-between items-center px-4">
@@ -59,13 +80,17 @@ export default async function DailyGamePage() {
             ChronoSort
           </h1>
         </div>
-        <div className="w-20 flex justify-end">
-          {/* Ha akarunk fejlécbe profil ikont, ide jöhet később */}
-        </div>
+        <div className="w-20"></div>
       </div>
 
-      {/* Átadjuk a user objektumot a kliensnek */}
-      <GameBoard initialCards={challenge.events_json} user={user} />
+      {/* Átadjuk az eddigi pontot is! */}
+      <GameBoard
+        initialCards={challenge.events_json}
+        user={user}
+        existingScore={existingScore}
+      />
+
+      <NicknameModal user={user} />
     </main>
   );
 }

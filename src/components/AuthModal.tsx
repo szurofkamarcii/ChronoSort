@@ -124,6 +124,24 @@ export default function AuthModal({
               </div>
             )}
 
+            {/* ÚJ: Nicknév mező, csak regisztrációnál látszik */}
+            {!isLogin && (
+              <div>
+                <label className="block text-xs font-bold text-gray-600 mb-1 ml-1 uppercase tracking-wide">
+                  Nicknév (Ez jelenik meg a ranglistán)
+                </label>
+                <input
+                  type="text"
+                  name="nickname"
+                  required={!isLogin}
+                  minLength={3}
+                  maxLength={20}
+                  className="w-full bg-gray-50 border border-gray-200 text-gray-900 rounded-xl px-4 py-3 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:bg-white transition-all"
+                  placeholder="Pl. ChronoMester"
+                />
+              </div>
+            )}
+
             <div>
               <label className="block text-xs font-bold text-gray-600 mb-1 ml-1 uppercase tracking-wide">
                 Email cím

@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useState, useEffect, forwardRef } from "react";
+import { getHungarianDateString } from "@/lib/dateUtils";
 import {
   DndContext,
   closestCenter,
@@ -22,7 +23,7 @@ import {
   useSortable,
 } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
-import { saveDailyScore } from "@/app/actions/score";
+import { saveDailyScore, getContextualLeaderboard } from "@/app/actions/score";
 import AuthModal from "./AuthModal";
 
 type CardData = {
@@ -38,6 +39,7 @@ type CardStatus = "correct" | "incorrect" | "none";
 interface GameBoardProps {
   initialCards: CardData[];
   user?: any | null;
+  existingScore?: any | null;
 }
 
 const MAX_ATTEMPTS = 5;
@@ -245,6 +247,7 @@ function SortableCard({ card, index, status, isManualLocked, disabled }: any) {
 export default function GameBoard({
   initialCards,
   user = null,
+  existingScore = null,
 }: GameBoardProps) {
   const [cards, setCards] = useState<CardData[]>([]);
   const [isClient, setIsClient] = useState(false);
@@ -256,21 +259,50 @@ export default function GameBoard({
   const [attemptsLog, setAttemptsLog] = useState<string[][]>([]);
   const [isLogDropdownOpen, setIsLogDropdownOpen] = useState(false);
 
-  // Új állapotok
+  // Állapotok a játék végéhez és a mentéshez
   const [isWon, setIsWon] = useState(false);
   const [isLost, setIsLost] = useState(false);
-  const [cooldown, setCooldown] = useState(0); // Másodpercben
+  const [cooldown, setCooldown] = useState(0);
   const [startTime, setStartTime] = useState<number>(0);
   const [finalScore, setFinalScore] = useState<number>(0);
   const [timeTaken, setTimeTaken] = useState<number>(0);
+  const [finalAttempts, setFinalAttempts] = useState<number>(0); // <--- EZ HIÁNYZOTT!
 
+  // UI Állapotok
   const [copied, setCopied] = useState(false);
   const [isShareModalOpen, setIsShareModalOpen] = useState(false);
   const [isAuthModalOpen, setIsAuthModalOpen] = useState(false);
   const [scoreSaved, setScoreSaved] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
 
+  // Ranglista
+  const [leaderboard, setLeaderboard] = useState<any[] | null>(null);
+  const [isLoadingLeaderboard, setIsLoadingLeaderboard] = useState(false);
+
   const [activeId, setActiveId] = useState<string | null>(null);
+
+  // Segédfüggvény, ami beállítja a pályát "Már játszott" állapotra
+  const setupFinishedState = (scoreData: any) => {
+    setCards([...initialCards]);
+    const allCorrectStatuses: Record<string, CardStatus> = {};
+    initialCards.forEach((c) => (allCorrectStatuses[c.id] = "correct"));
+    setCardStatuses(allCorrectStatuses);
+
+    if (scoreData.score > 0) setIsWon(true);
+    else setIsLost(true);
+
+    setFinalScore(scoreData.score);
+    setTimeTaken(scoreData.time_seconds);
+    setFinalAttempts(scoreData.attempts);
+
+    // Ranglista betöltése
+    setIsLoadingLeaderboard(true);
+    const todayStr = getHungarianDateString();
+    getContextualLeaderboard(todayStr, user?.id).then((lbRes) => {
+      if (lbRes.success) setLeaderboard(lbRes.data);
+      setIsLoadingLeaderboard(false);
+    });
+  };
 
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 5 } }),
@@ -285,6 +317,29 @@ export default function GameBoard({
   useEffect(() => {
     if (!initialCards || initialCards.length === 0) return;
 
+    const todayStr = getHungarianDateString();
+
+    // 1. Ha adatbázis szerint már játszott ma
+    if (existingScore) {
+      setupFinishedState(existingScore);
+      setIsClient(true);
+      return;
+    }
+
+    // 2. Ha a LocalStorage szerint (vendégként) már játszott ma
+    const localPlayed = localStorage.getItem("played_today");
+    if (localPlayed) {
+      try {
+        const parsed = JSON.parse(localPlayed);
+        if (parsed.date === todayStr) {
+          setupFinishedState(parsed);
+          setIsClient(true);
+          return;
+        }
+      } catch (e) {}
+    }
+
+    // 3. Ha még nem játszott: Keverés!
     let shuffled = [...initialCards];
     let isDerangement = false;
     let attempts = 0;
@@ -300,7 +355,7 @@ export default function GameBoard({
     setCards(shuffled);
     setIsClient(true);
     setStartTime(Date.now());
-  }, [initialCards]);
+  }, [initialCards, existingScore]);
 
   // Cooldown időzítő
   useEffect(() => {
@@ -317,7 +372,7 @@ export default function GameBoard({
       if (pendingScoreStr) {
         try {
           const pendingScore = JSON.parse(pendingScoreStr);
-          const todayStr = new Date().toISOString().split("T")[0];
+          const todayStr = getHungarianDateString();
 
           if (pendingScore.date === todayStr) {
             setIsSaving(true);
@@ -330,9 +385,15 @@ export default function GameBoard({
               if (res.success) {
                 setScoreSaved(true);
                 localStorage.removeItem("pending_score");
+                // Sikeres mentés után frissítjük a ranglistát, hogy a User lássa a nevét!
+                getContextualLeaderboard(todayStr, user.id).then((lbRes) => {
+                  if (lbRes.success) setLeaderboard(lbRes.data);
+                });
               }
               setIsSaving(false);
             });
+            // Közben biztosítjuk a UI befejezett állapotát
+            setupFinishedState(pendingScore);
           } else {
             localStorage.removeItem("pending_score");
           }
@@ -453,26 +514,49 @@ export default function GameBoard({
       );
       setFinalScore(calculatedScore);
       setTimeTaken(elapsedSeconds);
+      setFinalAttempts(totalAttempts); // Új
 
       saveScoreToDBorLocal(totalAttempts, calculatedScore, elapsedSeconds);
+
+      // Megjegyezzük helyben, hogy játszott
+      const todayStr = getHungarianDateString();
+      localStorage.setItem(
+        "played_today",
+        JSON.stringify({
+          attempts: totalAttempts,
+          score: calculatedScore,
+          time_seconds: elapsedSeconds,
+          date: todayStr,
+        }),
+      );
     } else {
       // HIBÁS TIPP
       if (totalAttempts >= MAX_ATTEMPTS) {
-        // JÁTÉK VÉGE (Vereség)
+        // VERESÉG
         setIsLost(true);
         setFinalScore(0);
         setTimeTaken(elapsedSeconds);
+        setFinalAttempts(totalAttempts); // Új
 
-        // Felfedjük a helyes sorrendet
         setCards([...initialCards]);
         const allCorrectStatuses: Record<string, CardStatus> = {};
         initialCards.forEach((c) => (allCorrectStatuses[c.id] = "correct"));
         setCardStatuses(allCorrectStatuses);
 
         saveScoreToDBorLocal(totalAttempts, 0, elapsedSeconds);
+
+        const todayStr = getHungarianDateString();
+        localStorage.setItem(
+          "played_today",
+          JSON.stringify({
+            attempts: totalAttempts,
+            score: 0,
+            time_seconds: elapsedSeconds,
+            date: todayStr,
+          }),
+        );
       } else {
-        // Időzár beállítása (5mp)
-        setCooldown(5);
+        setCooldown(totalAttempts * 5);
       }
     }
   };
@@ -482,7 +566,7 @@ export default function GameBoard({
     score: number,
     time: number,
   ) => {
-    const todayStr = new Date().toISOString().split("T")[0];
+    const todayStr = getHungarianDateString();
     if (user) {
       setIsSaving(true);
       saveDailyScore(attempts, score, time, todayStr).then((res) => {
@@ -807,7 +891,7 @@ export default function GameBoard({
                 {finalScore} pont
               </p>
               <p className="text-sm md:text-base text-gray-500 font-medium">
-                {attemptsLog.length} / {MAX_ATTEMPTS} próbálkozás • {timeTaken}{" "}
+                {finalAttempts} / {MAX_ATTEMPTS} próbálkozás • {timeTaken}{" "}
                 másodperc
               </p>
               {isLost && (
@@ -859,6 +943,87 @@ export default function GameBoard({
                   </>
                 )}
               </button>
+
+              {/* INLINE RANGLISTA */}
+              <div className="w-full max-w-md mt-10 bg-white p-6 rounded-3xl shadow-lg border border-gray-100">
+                <h3 className="text-xl font-black text-gray-900 mb-6 flex items-center justify-center gap-2">
+                  <svg
+                    className="w-6 h-6 text-yellow-500"
+                    fill="currentColor"
+                    viewBox="0 0 20 20">
+                    <path
+                      fillRule="evenodd"
+                      d="M10 2a1 1 0 01.932.638l2.164 5.385 5.86.417a1 1 0 01.57 1.74l-4.48 3.865 1.34 5.688a1 1 0 01-1.49 1.082L10 17.51l-5.066 2.805a1 1 0 01-1.49-1.082l1.34-5.688-4.48-3.865a1 1 0 01.57-1.74l5.86-.417 2.164-5.385A1 1 0 0110 2z"
+                      clipRule="evenodd"
+                    />
+                  </svg>
+                  Mai Napi Ranglista
+                </h3>
+
+                {isLoadingLeaderboard ? (
+                  <div className="flex justify-center py-6">
+                    <svg
+                      className="w-8 h-8 animate-spin text-blue-500"
+                      fill="none"
+                      viewBox="0 0 24 24">
+                      <circle
+                        className="opacity-25"
+                        cx="12"
+                        cy="12"
+                        r="10"
+                        stroke="currentColor"
+                        strokeWidth="4"></circle>
+                      <path
+                        className="opacity-75"
+                        fill="currentColor"
+                        d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                    </svg>
+                  </div>
+                ) : leaderboard && leaderboard.length > 0 ? (
+                  <div className="flex flex-col gap-2">
+                    {leaderboard.map((entry, idx) => {
+                      // Ha több mint 1 helyezésnyi ugrás van az előző elemhez képest, teszünk be egy elválasztót
+                      const isGap =
+                        idx > 0 && entry.rank > leaderboard[idx - 1].rank + 1;
+
+                      return (
+                        <React.Fragment key={entry.rank}>
+                          {isGap && (
+                            <div className="text-center text-gray-300 py-1 font-black text-xl leading-none">
+                              ⋮
+                            </div>
+                          )}
+                          <div
+                            className={`flex items-center gap-3 p-3 rounded-2xl transition-all ${entry.isCurrentUser ? "bg-blue-50 border-2 border-blue-400 shadow-md scale-105 my-2" : "bg-gray-50 border border-gray-100"}`}>
+                            <span
+                              className={`w-8 text-center font-black ${entry.rank === 1 ? "text-yellow-500 text-lg" : entry.rank === 2 ? "text-gray-400 text-lg" : entry.rank === 3 ? "text-orange-400 text-lg" : "text-gray-400 text-sm"}`}>
+                              {entry.rank}.
+                            </span>
+                            <div className="flex-1 overflow-hidden">
+                              <p
+                                className={`font-bold truncate text-sm leading-tight ${entry.isCurrentUser ? "text-blue-900" : "text-gray-800"}`}>
+                                {entry.player_name || "Névtelen Játékos"}
+                              </p>
+                              <p
+                                className={`text-[11px] font-medium leading-tight mt-0.5 ${entry.isCurrentUser ? "text-blue-600" : "text-gray-500"}`}>
+                                {entry.attempts} tipp • {entry.time_seconds} mp
+                              </p>
+                            </div>
+                            <span
+                              className={`font-black text-lg ${entry.isCurrentUser ? "text-blue-700" : "text-gray-700"}`}>
+                              {entry.score}
+                            </span>
+                          </div>
+                        </React.Fragment>
+                      );
+                    })}
+                  </div>
+                ) : (
+                  <p className="text-center text-sm text-gray-500 py-4 font-medium">
+                    Még nincsenek mai eredmények.
+                  </p>
+                )}
+              </div>
 
               {!user ? (
                 <button

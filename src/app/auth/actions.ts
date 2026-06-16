@@ -9,10 +9,16 @@ export async function signUpWithEmail(formData: FormData) {
   const supabase = await createClient();
   const email = formData.get("email") as string;
   const password = formData.get("password") as string;
+  const nickname = formData.get("nickname") as string;
 
   const { error } = await supabase.auth.signUp({
     email,
     password,
+    options: {
+      data: {
+        nickname: nickname,
+      },
+    },
   });
 
   if (error) return { success: false, error: error.message };
@@ -64,4 +70,28 @@ export async function signOut() {
   const supabase = await createClient();
   await supabase.auth.signOut();
   redirect("/");
+}
+
+// ÚJ: Bejelentkezett felhasználó nicknevének beállítása
+export async function updateUserNickname(formData: FormData) {
+  const supabase = await createClient();
+  const nickname = formData.get("nickname") as string;
+
+  if (!nickname || nickname.length < 3) {
+    return {
+      success: false,
+      error: "A nicknévnek legalább 3 karakternek kell lennie.",
+    };
+  }
+
+  // A supabase.auth.updateUser frissíti a jelenlegi session-höz tartozó adatait
+  const { error } = await supabase.auth.updateUser({
+    data: { nickname: nickname },
+  });
+
+  if (error) {
+    return { success: false, error: error.message };
+  }
+
+  return { success: true };
 }

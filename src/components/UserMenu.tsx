@@ -7,19 +7,22 @@ import { signOut } from "@/app/auth/actions";
 export default function UserMenu({ user }: { user: any }) {
   const [isModalOpen, setIsModalOpen] = useState(false);
 
-  // Ha be van jelentkezve, a profilját mutatjuk
   if (user) {
+    // Megkeressük a megjelenítendő nevet
+    const displayName = user.user_metadata?.nickname || "Névtelen Játékos";
+    const displayInitial = displayName.charAt(0).toUpperCase();
+
     return (
       <div className="mb-8 w-full max-w-sm flex flex-col items-center gap-3 bg-white p-4 rounded-3xl shadow-sm border border-gray-100">
         <div className="flex items-center gap-3 w-full px-2">
           <div className="w-10 h-10 bg-gradient-to-tr from-blue-500 to-indigo-500 rounded-full flex items-center justify-center text-white font-bold shadow-inner">
-            {user.email?.charAt(0).toUpperCase() || "?"}
+            {displayInitial}
           </div>
           <div className="flex-1 overflow-hidden">
             <p className="text-sm font-bold text-gray-900 truncate">
-              {user.email}
+              {displayName}
             </p>
-            <p className="text-xs text-gray-500">Játékos</p>
+            <p className="text-xs text-gray-500">Készen áll a kihívásra</p>
           </div>
         </div>
         <button
@@ -31,7 +34,6 @@ export default function UserMenu({ user }: { user: any }) {
     );
   }
 
-  // Ha nincs bejelentkezve, a belépés gombot mutatjuk
   return (
     <>
       <button
